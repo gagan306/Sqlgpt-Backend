@@ -27,7 +27,7 @@ namespace ChatApi.Controllers
                     IsActive = true,
                     PasswordResetTokens = new List<PasswordResetToken>(),
                     RegistrationKey = request.RegistrationKey,
-                    IsRegistered = false
+                    IsRegistered = true,
                 };
                 _context.Employees.Add(employee);
                 _context.SaveChanges();

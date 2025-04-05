@@ -29,4 +29,9 @@ namespace ChatApi.Models
         public ICollection<PasswordResetToken> PasswordResetTokens { get; set; } = new List<PasswordResetToken>();
 
     }
+    public class EmployeeLogin
+    {
+        public string Name { get; set; }
+        public string? PasswordHash { get; set; }
+    }
 }
