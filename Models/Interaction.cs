@@ -12,7 +12,7 @@ namespace ChatApi.Models
         public string? Answer { get; set; }
 
         
-        public string? U_id { get; set; }
+        public Guid U_id { get; set; }
         
         public string? Post { get; set; }
 
