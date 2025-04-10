@@ -1,5 +1,8 @@
 using ChatApi.Data;
+using ChatApi.Services;
+using FluentAssertions.Common;
 using Microsoft.EntityFrameworkCore;
+
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -11,6 +14,9 @@ builder.Services.AddSwaggerGen();
 // Configure database context
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+builder.Services.AddHttpClient();
+builder.Services.AddScoped<QueryService>();
 
 // Configure CORS
 builder.Services.AddCors(options =>

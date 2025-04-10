@@ -9,7 +9,7 @@ namespace ChatApi.Data
         public DbSet<Question> Questions { get; set; }
         public DbSet<Employee> Employees { get; set; }
         public DbSet<PasswordResetToken> PasswordResetTokens { get; set; }
-
+        public DbSet<Interaction> Interaction{ get; set; }
         public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {

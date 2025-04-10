@@ -22,6 +22,8 @@ namespace ChatApi.Models
         public string RegistrationKey { get; set; }
         public bool IsRegistered { get; set; }=false;
 
+        public string Post {  get; set; }
+
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
         public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
@@ -33,5 +35,11 @@ namespace ChatApi.Models
     {
         public string Name { get; set; }
         public string? PasswordHash { get; set; }
+    }
+    public class GetEmpPost
+    {
+        public Guid Id { get; set; }
+        public string Post { get; set; }
+        public string Email { get; set; }
     }
 }
