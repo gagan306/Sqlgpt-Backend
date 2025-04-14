@@ -1,11 +1,12 @@
 ﻿using System;
 using System.Data;
-using Microsoft.Data.SqlClient;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System.Collections.Generic;
@@ -18,6 +19,7 @@ namespace ChatApi.Services
         private readonly string _connectionString;
         private readonly IHttpClientFactory _clientFactory;
         private readonly ILogger<QueryService> _logger;
+        private const int MaxRetries = 3;
 
         public QueryService(IConfiguration configuration, IHttpClientFactory clientFactory, ILogger<QueryService> logger)
         {
@@ -30,10 +32,8 @@ namespace ChatApi.Services
 
         public async Task<(string SQLQuery, object QueryResult, string StructuredAnswer)> ProcessQuestionAsync(string question)
         {
-            // Log the incoming question
             _logger.LogInformation("Processing question: {Question}", question);
 
-            // Generate SQL query from question
             string sqlQuery = await GenerateSQLQueryFromQuestion(question);
             if (string.IsNullOrWhiteSpace(sqlQuery))
             {
@@ -43,10 +43,7 @@ namespace ChatApi.Services
 
             _logger.LogInformation("Generated SQL query: {SqlQuery}", sqlQuery);
 
-            // Execute the SQL query
             object queryResult = await ExecuteSQLQueryAsync(sqlQuery);
-
-            // Generate structured answer from query result
             string structuredAnswer = await GenerateStructuredAnswer(question, sqlQuery, queryResult);
 
             return (sqlQuery, queryResult, structuredAnswer);
@@ -57,8 +54,6 @@ namespace ChatApi.Services
             try
             {
                 string prompt = $"Convert the following question into a valid MSSQL query:\n\nQuestion: {question}\nSQL Query:";
-
-                // Using explicit class instead of anonymous type
                 var systemMessage = new Message { Role = "system", Content = "You are a SQL generator for an MSSQL database." };
                 var userMessage = new Message { Role = "user", Content = prompt };
 
@@ -71,7 +66,7 @@ namespace ChatApi.Services
 
                 using var client = _clientFactory.CreateClient();
                 client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _openAiApiKey);
-                client.Timeout = TimeSpan.FromSeconds(30); // Set a reasonable timeout
+                client.Timeout = TimeSpan.FromSeconds(30);
 
                 var content = new StringContent(
                     JsonSerializer.Serialize(requestBody),
@@ -79,25 +74,10 @@ namespace ChatApi.Services
                     "application/json"
                 );
 
-                _logger.LogInformation("Sending request to OpenAI API");
-
-                HttpResponseMessage response = await client.PostAsync("https://api.openai.com/v1/chat/completions", content);
-                string responseContent = await response.Content.ReadAsStringAsync();
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    _logger.LogError("OpenAI API error: Status {StatusCode}, Response: {Response}",
-                        response.StatusCode, responseContent);
-                    throw new Exception($"OpenAI API returned error: {response.StatusCode}");
-                }
+                _logger.LogInformation("Sending request to OpenAI API for SQL generation");
+                string responseContent = await PostWithRetriesAsync(client, content, "https://api.openai.com/v1/chat/completions", "SQL query generation");
 
                 _logger.LogDebug("OpenAI API response: {Response}", responseContent);
-
-                if (string.IsNullOrWhiteSpace(responseContent))
-                {
-                    _logger.LogError("Empty response from OpenAI API");
-                    throw new Exception("Empty response from OpenAI API");
-                }
 
                 using JsonDocument document = JsonDocument.Parse(responseContent);
                 if (document.RootElement.TryGetProperty("choices", out JsonElement choices) && choices.GetArrayLength() > 0)
@@ -131,7 +111,6 @@ namespace ChatApi.Services
             }
             catch (Exception ex) when (ex.Message.Contains("API"))
             {
-                // Re-throw API-specific exceptions without wrapping
                 throw;
             }
             catch (Exception ex)
@@ -151,23 +130,21 @@ namespace ChatApi.Services
                 using var command = new SqlCommand(sqlQuery, connection)
                 {
                     CommandType = CommandType.Text,
-                    CommandTimeout = 30 // Set a reasonable timeout
+                    CommandTimeout = 30
                 };
 
                 _logger.LogInformation("Executing SQL query against database");
-
                 await connection.OpenAsync();
                 using var reader = await command.ExecuteReaderAsync();
                 table.Load(reader);
 
                 _logger.LogInformation("SQL query executed successfully. Rows returned: {RowCount}", table.Rows.Count);
-
                 return table;
             }
             catch (SqlException ex)
             {
                 _logger.LogError(ex, "SQL error executing query: {SqlQuery}", sqlQuery);
-                throw; // Let the caller handle SQL exceptions
+                throw;
             }
             catch (Exception ex)
             {
@@ -182,8 +159,6 @@ namespace ChatApi.Services
             {
                 string resultsJson = JsonSerializer.Serialize(queryResult);
                 string prompt = $"Given the question: \"{question}\", SQL: \"{sqlQuery}\", and result in JSON: {resultsJson}, provide a clear, structured answer summarizing the result.";
-
-                // Using explicit class instead of anonymous type
                 var systemMessage = new Message { Role = "system", Content = "You are a data analyst summarizing SQL results into a readable answer." };
                 var userMessage = new Message { Role = "user", Content = prompt };
 
@@ -196,7 +171,7 @@ namespace ChatApi.Services
 
                 using var client = _clientFactory.CreateClient();
                 client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _openAiApiKey);
-                client.Timeout = TimeSpan.FromSeconds(30); // Set a reasonable timeout
+                client.Timeout = TimeSpan.FromSeconds(30);
 
                 var content = new StringContent(
                     JsonSerializer.Serialize(requestBody),
@@ -205,16 +180,7 @@ namespace ChatApi.Services
                 );
 
                 _logger.LogInformation("Sending request to OpenAI API for answer generation");
-
-                HttpResponseMessage response = await client.PostAsync("https://api.openai.com/v1/chat/completions", content);
-                string responseContent = await response.Content.ReadAsStringAsync();
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    _logger.LogError("OpenAI API error during answer generation: Status {StatusCode}, Response: {Response}",
-                        response.StatusCode, responseContent);
-                    return "Failed to generate structured answer due to API error.";
-                }
+                string responseContent = await PostWithRetriesAsync(client, content, "https://api.openai.com/v1/chat/completions", "structured answer generation");
 
                 if (string.IsNullOrWhiteSpace(responseContent))
                 {
@@ -253,6 +219,43 @@ namespace ChatApi.Services
                 _logger.LogError(ex, "Unexpected error during answer generation");
                 return $"Failed to generate structured answer: {ex.Message}";
             }
+        }
+
+        /// <summary>
+        /// Sends an HTTP POST request with retry logic for handling rate limit errors.
+        /// </summary>
+        private async Task<string> PostWithRetriesAsync(HttpClient client, StringContent content, string url, string contextLog)
+        {
+            int attempt = 0;
+            TimeSpan delay = TimeSpan.FromSeconds(2);
+
+            while (attempt < MaxRetries)
+            {
+                attempt++;
+                HttpResponseMessage response = await client.PostAsync(url, content);
+                string responseContent = await response.Content.ReadAsStringAsync();
+
+                if (response.IsSuccessStatusCode)
+                {
+                    return responseContent;
+                }
+                else if (response.StatusCode == HttpStatusCode.TooManyRequests)
+                {
+                    _logger.LogWarning("Received TooManyRequests response during {Context}. Attempt {Attempt} of {MaxRetries}. Retrying in {Delay} seconds.",
+                        contextLog, attempt, MaxRetries, delay.TotalSeconds);
+                    await Task.Delay(delay);
+                    delay = delay * 2;  // Exponential backoff
+                    continue;
+                }
+                else
+                {
+                    _logger.LogError("OpenAI API error during {Context}: Status {StatusCode}, Response: {Response}",
+                        contextLog, response.StatusCode, responseContent);
+                    throw new Exception($"OpenAI API returned error: {response.StatusCode}");
+                }
+            }
+
+            throw new Exception("Exceeded maximum retry attempts for OpenAI API call.");
         }
     }
 
