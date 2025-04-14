@@ -20,7 +20,7 @@ namespace ChatApi.Services
         private readonly string _connectionString;
         private readonly IHttpClientFactory _clientFactory;
         private readonly ILogger<QueryService> _logger;
-        private const int MaxRetries = 5;  // Increased maximum retries
+        private const int MaxRetries = 5;  // Maximum retry attempts
 
         public QueryService(IConfiguration configuration, IHttpClientFactory clientFactory, ILogger<QueryService> logger)
         {
@@ -58,8 +58,8 @@ namespace ChatApi.Services
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error processing the query for question: {Question}", question);
-                // Instead of letting the exception bubble up, return a fallback message.
-                return (string.Empty, null, "Service is currently overloaded, please try again later.");
+                // Return a fallback message with more detail (for instance, log the inner exception details)
+                return (string.Empty, null, "Service is currently overloaded or experiencing issues. Please try again later.");
             }
         }
 
@@ -256,7 +256,6 @@ namespace ChatApi.Services
                 }
                 else if (response.StatusCode == HttpStatusCode.TooManyRequests)
                 {
-                    // Check if the Retry-After header is provided
                     if (response.Headers.TryGetValues("Retry-After", out IEnumerable<string>? values))
                     {
                         if (int.TryParse(values.FirstOrDefault(), out int seconds))
@@ -268,7 +267,7 @@ namespace ChatApi.Services
                     _logger.LogWarning("Received TooManyRequests during {Context}. Attempt {Attempt} of {MaxRetries}. Retrying in {Delay} seconds.",
                         contextLog, attempt, MaxRetries, delay.TotalSeconds);
                     await Task.Delay(delay);
-                    delay = delay * 2;  // Exponential backoff for subsequent attempts
+                    delay = delay * 2;
                     continue;
                 }
                 else
@@ -283,7 +282,6 @@ namespace ChatApi.Services
         }
     }
 
-    // Explicit classes to replace anonymous types
     public class Message
     {
         public string Role { get; set; } = string.Empty;
