@@ -10,6 +10,7 @@ using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace ChatApi.Services
 {
@@ -32,21 +33,34 @@ namespace ChatApi.Services
 
         public async Task<(string SQLQuery, object QueryResult, string StructuredAnswer)> ProcessQuestionAsync(string question)
         {
-            _logger.LogInformation("Processing question: {Question}", question);
-
-            string sqlQuery = await GenerateSQLQueryFromQuestion(question);
-            if (string.IsNullOrWhiteSpace(sqlQuery))
+            try
             {
-                _logger.LogError("Failed to generate SQL query from question: {Question}", question);
-                throw new Exception("Failed to generate SQL query from the question.");
+                _logger.LogInformation("Processing question: {Question}", question);
+
+                // Generate SQL query from the question
+                string sqlQuery = await GenerateSQLQueryFromQuestion(question);
+                if (string.IsNullOrWhiteSpace(sqlQuery))
+                {
+                    _logger.LogError("Failed to generate SQL query from question: {Question}", question);
+                    throw new Exception("Failed to generate SQL query from the question.");
+                }
+
+                _logger.LogInformation("Generated SQL query: {SqlQuery}", sqlQuery);
+
+                // Execute the SQL query
+                object queryResult = await ExecuteSQLQueryAsync(sqlQuery);
+
+                // Generate a structured answer from the query result
+                string structuredAnswer = await GenerateStructuredAnswer(question, sqlQuery, queryResult);
+
+                return (sqlQuery, queryResult, structuredAnswer);
             }
-
-            _logger.LogInformation("Generated SQL query: {SqlQuery}", sqlQuery);
-
-            object queryResult = await ExecuteSQLQueryAsync(sqlQuery);
-            string structuredAnswer = await GenerateStructuredAnswer(question, sqlQuery, queryResult);
-
-            return (sqlQuery, queryResult, structuredAnswer);
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error processing the query for question: {Question}", question);
+                // Instead of letting the exception bubble up, return a fallback message.
+                return (string.Empty, null, "Service is currently overloaded, please try again later.");
+            }
         }
 
         private async Task<string> GenerateSQLQueryFromQuestion(string question)
@@ -245,7 +259,7 @@ namespace ChatApi.Services
                     // Check if the Retry-After header is provided
                     if (response.Headers.TryGetValues("Retry-After", out IEnumerable<string>? values))
                     {
-                        if (int.TryParse(System.Linq.Enumerable.FirstOrDefault(values), out int seconds))
+                        if (int.TryParse(values.FirstOrDefault(), out int seconds))
                         {
                             delay = TimeSpan.FromSeconds(seconds);
                         }
