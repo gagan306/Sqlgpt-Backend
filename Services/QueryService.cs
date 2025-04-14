@@ -19,7 +19,7 @@ namespace ChatApi.Services
         private readonly string _connectionString;
         private readonly IHttpClientFactory _clientFactory;
         private readonly ILogger<QueryService> _logger;
-        private const int MaxRetries = 3;
+        private const int MaxRetries = 5;  // Increased maximum retries
 
         public QueryService(IConfiguration configuration, IHttpClientFactory clientFactory, ILogger<QueryService> logger)
         {
@@ -129,7 +129,7 @@ namespace ChatApi.Services
                 using var connection = new SqlConnection(_connectionString);
                 using var command = new SqlCommand(sqlQuery, connection)
                 {
-                    CommandType = CommandType.Text,
+                    CommandType = System.Data.CommandType.Text,
                     CommandTimeout = 30
                 };
 
@@ -223,6 +223,7 @@ namespace ChatApi.Services
 
         /// <summary>
         /// Sends an HTTP POST request with retry logic for handling rate limit errors.
+        /// Honors the Retry-After header if present.
         /// </summary>
         private async Task<string> PostWithRetriesAsync(HttpClient client, StringContent content, string url, string contextLog)
         {
@@ -241,10 +242,19 @@ namespace ChatApi.Services
                 }
                 else if (response.StatusCode == HttpStatusCode.TooManyRequests)
                 {
-                    _logger.LogWarning("Received TooManyRequests response during {Context}. Attempt {Attempt} of {MaxRetries}. Retrying in {Delay} seconds.",
+                    // Check if the Retry-After header is provided
+                    if (response.Headers.TryGetValues("Retry-After", out IEnumerable<string>? values))
+                    {
+                        if (int.TryParse(System.Linq.Enumerable.FirstOrDefault(values), out int seconds))
+                        {
+                            delay = TimeSpan.FromSeconds(seconds);
+                        }
+                    }
+
+                    _logger.LogWarning("Received TooManyRequests during {Context}. Attempt {Attempt} of {MaxRetries}. Retrying in {Delay} seconds.",
                         contextLog, attempt, MaxRetries, delay.TotalSeconds);
                     await Task.Delay(delay);
-                    delay = delay * 2;  // Exponential backoff
+                    delay = delay * 2;  // Exponential backoff for subsequent attempts
                     continue;
                 }
                 else
